@@ -1,0 +1,216 @@
+import numpy as np
+import pandas as pd
+import streamlit as st
+from sentence_transformers import SentenceTransformer
+from sklearn.cluster import KMeans
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics.pairwise import cosine_similarity
+
+# ==============================================================================
+# SECTION 1: PAGE CONFIGURATION & HEADER
+# ==============================================================================
+# Set tab title, icon, and wide page layout
+st.set_page_config(
+    page_title="AI Semantic Search Engine", page_icon="🔍", layout="wide"
+)
+
+# Main Title & Description
+st.title("🔍 Intelligent Semantic Search & AI Ranking Engine")
+st.write(
+    "Welcome! This application demonstrates how modern AI search engines process human language. "
+    "Instead of just matching keywords, it converts text into numerical vectors to find true context and meaning."
+)
+
+st.markdown("---")
+
+
+# ==============================================================================
+# SECTION 2: LOAD AI MODELS & KNOWLEDGE BASE
+# ==============================================================================
+# Cache model loading so the page doesn't reload the model on every click
+@st.cache_resource
+def load_transformer_model():
+    # Load the Sentence Transformer model from HuggingFace
+    return SentenceTransformer("all-MiniLM-L6-v2")
+
+
+with st.spinner("Loading AI Encoder Model into Memory..."):
+    ai_encoder = load_transformer_model()
+
+# Sample Knowledge Base Documents
+documents_database = [
+    "Natural Language Processing allows computers to read, understand, and derive meaning from human text.",
+    "Sentence Transformers convert full sentences into dense vector numbers containing semantic meaning.",
+    "Cosine Similarity measures the cosine of the angle between two mathematical vectors in n-dimensional space.",
+    "Logistic Regression is a supervised learning algorithm used here to adjust document rank based on user clicks.",
+    "K-Means Clustering is an unsupervised algorithm that automatically groups similar document vectors together.",
+    "Streamlit is an open-source Python framework that turns data scripts into interactive web applications easily.",
+    "Machine learning algorithms build a model based on sample data in order to make predictions without being explicitly programmed.",
+    "Vector databases store embeddings efficiently to allow lightning-fast similarity search across millions of records.",
+]
+
+# Convert all knowledge base sentences into numerical vectors (Matrix Shape: 8 x 384)
+doc_vectors = ai_encoder.encode(documents_database)
+
+
+# ==============================================================================
+# SECTION 3: SIDEBAR CONTROL PANEL
+# ==============================================================================
+st.sidebar.image(
+    "https://img.icons8.com/color/96/000000/settings--v1.png", width=60
+)
+st.sidebar.title("⚙️ Engine Settings")
+st.sidebar.write("Customize how the AI algorithms process and rank documents:")
+
+# Control 1: K-Means Cluster Slider
+st.sidebar.subheader("1. Unsupervised Clustering")
+num_clusters = st.sidebar.slider(
+    "Select Number of Clusters (K-Means):", min_value=2, max_value=4, value=2
+)
+
+# Run K-Means Clustering on the document vectors
+kmeans_algorithm = KMeans(n_clusters=num_clusters, random_state=42)
+cluster_assignments = kmeans_algorithm.fit_predict(doc_vectors)
+
+# Control 2: Logistic Regression Toggle
+st.sidebar.subheader("2. Supervised Re-ranking")
+enable_reranking = st.sidebar.checkbox(
+    "Apply Logistic Regression (Click History)", value=False
+)
+
+st.sidebar.info(
+    "💡 **Tip:** Enabling re-ranking combines mathematical similarity with simulated user preferences!"
+)
+
+
+# ==============================================================================
+# SECTION 4: MAIN SEARCH INTERFACE
+# ==============================================================================
+st.subheader("🔎 Search the Knowledge Base")
+
+# Text input box for user query
+user_search_query = st.text_input(
+    "Type your question or query below:", value="How do vector embeddings work?"
+)
+
+# Action button
+search_clicked = st.button("🚀 Run AI Search", type="primary")
+
+if user_search_query or search_clicked:
+
+    # --------------------------------------------------------------------------
+    # PIPELINE STEP 1: Vector Encoding
+    # --------------------------------------------------------------------------
+    # Convert query string into a 384-dimensional numerical vector
+    query_vector = ai_encoder.encode([user_search_query])
+
+    # --------------------------------------------------------------------------
+    # PIPELINE STEP 2: Compute Cosine Similarity
+    # --------------------------------------------------------------------------
+    # Measure mathematical angle between query vector and all document vectors
+    cosine_scores = cosine_similarity(query_vector, doc_vectors)[0]
+
+    final_scores = cosine_scores.copy()
+
+    # --------------------------------------------------------------------------
+    # PIPELINE STEP 3: Logistic Regression Re-ranking (Optional)
+    # --------------------------------------------------------------------------
+    if enable_reranking:
+        # Mock click preferences (1 = user clicked before, 0 = not clicked)
+        simulated_clicks = np.array([1, 1, 0, 1, 0, 0, 1, 0])
+
+        # Train a simple classifier on vector features and click targets
+        classifier = LogisticRegression()
+        classifier.fit(doc_vectors, simulated_clicks)
+
+        # Predict probability score of user engagement P(Y=1|X)
+        click_probabilities = classifier.predict_proba(doc_vectors)[:, 1]
+
+        # Final Score = 60% Cosine Similarity + 40% User Click Probability
+        final_scores = (0.6 * cosine_scores) + (0.4 * click_probabilities)
+
+    # Sort results in descending order (highest score first)
+    ranked_indices = np.argsort(final_scores)[::-1]
+
+    # --------------------------------------------------------------------------
+    # PIPELINE STEP 4: Render Search Results
+    # --------------------------------------------------------------------------
+    st.markdown("### 🎯 Best Matching Results")
+
+    # Display results as clean, formatted cards
+    for rank, doc_index in enumerate(ranked_indices, start=1):
+        document_text = documents_database[doc_index]
+        overall_score = final_scores[doc_index]
+        similarity_score = cosine_scores[doc_index]
+        assigned_cluster = cluster_assignments[doc_index]
+
+        # Use visual container box for each result card
+        with st.container():
+            col1, col2 = st.columns([4, 1])
+
+            with col1:
+                st.markdown(f"#### **{rank}. {document_text}**")
+                st.caption(
+                    f"Cluster Group: **Cluster #{assigned_cluster}** | Document ID: `DOC_{doc_index+1:02d}`"
+                )
+
+            with col2:
+                # Progress bar visualizing match percentage
+                score_percentage = int(overall_score * 100)
+                st.metric(label="Match Score", value=f"{overall_score:.4f}")
+                st.progress(max(0, min(score_percentage, 100)))
+
+            # Expandable detail section showing metrics
+            with st.expander("📊 View Detailed Metrics for this Result"):
+                detail_col1, detail_col2 = st.columns(2)
+                detail_col1.write(
+                    f"• **Cosine Similarity Score:** `{similarity_score:.4f}`"
+                )
+                detail_col2.write(
+                    f"• **Assigned K-Means Cluster:** `Cluster #{assigned_cluster}`"
+                )
+
+                if enable_reranking:
+                    st.write(
+                        "• **Logistic Regression Applied:** Yes (Adjusted using click history)"
+                    )
+
+            st.write("---")
+
+
+# ==============================================================================
+# SECTION 5: K-MEANS DOCUMENT CLUSTERS TAB
+# ==============================================================================
+st.markdown("## 📁 Knowledge Base Overview & Clusters")
+
+tab1, tab2 = st.tabs(["📌 Grouped Clusters (K-Means)", "🗃️ Raw Knowledge Base"])
+
+with tab1:
+    st.write(
+        "Below are the knowledge base documents grouped into clusters based on vector similarity:"
+    )
+
+    cluster_cols = st.columns(num_clusters)
+
+    for cluster_id in range(num_clusters):
+        with cluster_cols[cluster_id]:
+            st.markdown(f"### 🔹 Cluster {cluster_id}")
+
+            for idx, text in enumerate(documents_database):
+                if cluster_assignments[idx] == cluster_id:
+                    st.info(f"**Doc #{idx+1}:**\n{text}")
+
+with tab2:
+    st.write("Complete list of sentences stored in memory:")
+
+    # Display as a clean DataFrame table
+    df = pd.DataFrame(
+        {
+            "Doc ID": [f"DOC_{i+1:02d}" for i in range(len(documents_database))],
+            "Document Content": documents_database,
+            "Assigned Cluster": [
+                f"Cluster {c}" for c in cluster_assignments
+            ],
+        }
+    )
+    st.dataframe(df, use_container_width=True)
