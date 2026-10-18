@@ -1,0 +1,673 @@
+
+from __future__ import annotations
+
+import hashlib
+import io
+import sqlite3
+from pathlib import Path
+
+import numpy as np
+import streamlit as st
+from sentence_transformers import SentenceTransformer
+
+try:
+    import pymupdf
+except ImportError:
+    pymupdf = None
+
+try:
+    from docx import Document as DocxDocument
+except ImportError:
+    DocxDocument = None
+
+
+APP_DIR = Path(__file__).resolve().parent
+DATA_DIR = APP_DIR / "data"
+DB_PATH = DATA_DIR / "search_index.sqlite3"
+SAMPLE_DIR = APP_DIR / "sample_documents"
+
+MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+
+st.set_page_config(
+    page_title="AI Personal Search",
+    page_icon="🔎",
+    layout="wide",
+)
+
+
+def get_connection():
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    con = sqlite3.connect(DB_PATH, timeout=60)
+    con.row_factory = sqlite3.Row
+    con.execute("PRAGMA foreign_keys=ON")
+    con.execute("PRAGMA journal_mode=WAL")
+
+    return con
+
+
+def init_db():
+    with get_connection() as con:
+        con.executescript("""
+        CREATE TABLE IF NOT EXISTS documents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename TEXT NOT NULL,
+            source_path TEXT NOT NULL,
+            file_hash TEXT NOT NULL,
+            file_type TEXT NOT NULL,
+            text_chars INTEGER NOT NULL,
+            added_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS passages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            document_id INTEGER NOT NULL
+                REFERENCES documents(id) ON DELETE CASCADE,
+            chunk_number INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            embedding BLOB NOT NULL,
+            UNIQUE(document_id, chunk_number)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_passages_document_id
+        ON passages(document_id);
+
+        CREATE INDEX IF NOT EXISTS idx_documents_hash
+        ON documents(file_hash);
+
+        CREATE TABLE IF NOT EXISTS feedback (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            passage_id INTEGER NOT NULL
+                REFERENCES passages(id) ON DELETE CASCADE,
+            useful INTEGER NOT NULL CHECK(useful IN (0,1)),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+
+
+@st.cache_resource(
+    show_spinner="Loading AI model. First download may take a few minutes..."
+)
+def load_model():
+    return SentenceTransformer(MODEL_NAME)
+
+
+def extract_text(filename: str, data: bytes) -> str:
+    suffix = Path(filename).suffix.lower()
+
+    if suffix == ".txt":
+        return data.decode("utf-8-sig", errors="replace")
+
+    if suffix == ".pdf":
+        if pymupdf is None:
+            raise RuntimeError(
+                "PDF support is missing. Install PyMuPDF."
+            )
+
+        with pymupdf.open(stream=data, filetype="pdf") as pdf:
+            pages = [
+                page.get_text("text").strip()
+                for page in pdf
+            ]
+
+        return "\n\n".join(page for page in pages if page)
+
+    if suffix == ".docx":
+        if DocxDocument is None:
+            raise RuntimeError(
+                "DOCX support is missing. Install python-docx."
+            )
+
+        doc = DocxDocument(io.BytesIO(data))
+        parts = [
+            paragraph.text.strip()
+            for paragraph in doc.paragraphs
+            if paragraph.text.strip()
+        ]
+
+        for table in doc.tables:
+            for row in table.rows:
+                line = " | ".join(
+                    cell.text.strip()
+                    for cell in row.cells
+                    if cell.text.strip()
+                )
+                if line:
+                    parts.append(line)
+
+        return "\n".join(parts)
+
+    raise ValueError("Use PDF, DOCX, or TXT files.")
+
+
+def chunk_text(
+    text: str,
+    chunk_words: int = 180,
+    overlap: int = 35,
+) -> list[str]:
+
+    words = text.split()
+
+    if not words:
+        return []
+
+    step = max(1, chunk_words - overlap)
+
+    return [
+        " ".join(words[i:i + chunk_words])
+        for i in range(0, len(words), step)
+        if words[i:i + chunk_words]
+    ]
+
+
+def add_document(
+    filename: str,
+    data: bytes,
+    source_path: str | None = None,
+):
+    digest = hashlib.sha256(data).hexdigest()
+
+    display_path = str(
+        source_path or f"Uploaded files/{Path(filename).name}"
+    )
+
+    with get_connection() as con:
+        existing = con.execute(
+            """
+            SELECT id FROM documents
+            WHERE file_hash=? AND source_path=?
+            """,
+            (digest, display_path),
+        ).fetchone()
+
+    if existing:
+        return "duplicate", 0, 0
+
+    text = extract_text(filename, data).strip()
+
+    if len(text) < 10:
+        return "empty", 0, len(text)
+
+    chunks = chunk_text(text)
+
+    if not chunks:
+        return "empty", 0, len(text)
+
+    model = load_model()
+
+    vectors = model.encode(
+        chunks,
+        normalize_embeddings=True,
+        show_progress_bar=False,
+    )
+
+    with get_connection() as con:
+        cur = con.execute(
+            """
+            INSERT INTO documents
+            (filename, source_path, file_hash, file_type, text_chars)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                Path(filename).name,
+                display_path,
+                digest,
+                Path(filename).suffix.lower().lstrip("."),
+                len(text),
+            ),
+        )
+
+        doc_id = cur.lastrowid
+
+        con.executemany(
+            """
+            INSERT INTO passages
+            (document_id, chunk_number, text, embedding)
+            VALUES (?, ?, ?, ?)
+            """,
+            [
+                (
+                    doc_id,
+                    i + 1,
+                    chunk,
+                    np.asarray(
+                        vectors[i], dtype=np.float32
+                    ).tobytes(),
+                )
+                for i, chunk in enumerate(chunks)
+            ],
+        )
+
+    return "added", len(chunks), len(text)
+
+
+def get_documents():
+    with get_connection() as con:
+        return list(
+            con.execute("""
+                SELECT
+                    d.id,
+                    d.filename,
+                    d.source_path,
+                    d.file_type,
+                    d.text_chars,
+                    d.added_at,
+                    COUNT(p.id) AS passage_count
+                FROM documents d
+                LEFT JOIN passages p
+                    ON p.document_id = d.id
+                GROUP BY d.id
+                ORDER BY d.added_at DESC, d.id DESC
+            """)
+        )
+
+
+def search_documents(query: str, top_k: int):
+    with get_connection() as con:
+        rows = list(
+            con.execute("""
+                SELECT
+                    p.id,
+                    p.document_id,
+                    p.chunk_number,
+                    p.text,
+                    p.embedding,
+                    d.filename,
+                    d.source_path,
+                    COALESCE(
+                        SUM(CASE WHEN f.useful=1 THEN 1 ELSE 0 END),
+                        0
+                    ) AS likes,
+                    COALESCE(
+                        SUM(CASE WHEN f.useful=0 THEN 1 ELSE 0 END),
+                        0
+                    ) AS dislikes
+                FROM passages p
+                JOIN documents d ON d.id = p.document_id
+                LEFT JOIN feedback f ON f.passage_id = p.id
+                GROUP BY p.id
+            """)
+        )
+
+    if not rows:
+        return []
+
+    model = load_model()
+
+    query_vector = model.encode(
+        [query],
+        normalize_embeddings=True,
+    )[0].astype(np.float32)
+
+    matrix = np.vstack([
+        np.frombuffer(
+            row["embedding"],
+            dtype=np.float32,
+        )
+        for row in rows
+    ])
+
+    scores = matrix @ query_vector
+
+    adjusted_scores = np.array([
+        float(scores[i])
+        + 0.02 * min(rows[i]["likes"], 4)
+        - 0.025 * min(rows[i]["dislikes"], 4)
+        for i in range(len(rows))
+    ])
+
+    best = np.argsort(adjusted_scores)[::-1][:top_k]
+
+    return [
+        {
+            "filename": rows[int(i)]["filename"],
+            "source_path": rows[int(i)]["source_path"],
+            "chunk_number": rows[int(i)]["chunk_number"],
+            "text": rows[int(i)]["text"],
+            "score": float(scores[int(i)]),
+            "passage_id": int(rows[int(i)]["id"]),
+        }
+        for i in best
+    ]
+
+
+init_db()
+
+st.title("🔎 AI Personal Search")
+
+st.caption(
+    "Search inside your own PDF, DOCX and TXT files. "
+    "Your library is saved locally on this computer."
+)
+
+st.info(
+    "Local-only prototype. Text-based PDFs work best; "
+    "scanned or image-only PDFs may need OCR."
+)
+
+st.header("1. Add documents")
+
+uploads = st.file_uploader(
+    "Choose PDF, DOCX or TXT files",
+    type=["pdf", "docx", "txt"],
+    accept_multiple_files=True,
+    key="document_uploader",
+)
+
+if st.button(
+    "Index selected files",
+    type="primary",
+    disabled=not uploads,
+    key="index_uploads",
+):
+    added = duplicates = empty = failed = passages_total = 0
+
+    progress = st.progress(0, text="Preparing documents...")
+
+    for i, upload in enumerate(uploads):
+        try:
+            status, count, chars = add_document(
+                upload.name,
+                upload.getvalue(),
+                f"Uploaded files/{upload.name}",
+            )
+
+            if status == "added":
+                added += 1
+                passages_total += count
+                st.write(
+                    f"✅ **{upload.name}** — indexed {count} "
+                    f"passages from {chars:,} characters."
+                )
+
+            elif status == "duplicate":
+                duplicates += 1
+                st.write(
+                    f"↪️ **{upload.name}** — already indexed."
+                )
+
+            else:
+                empty += 1
+                st.warning(
+                    f"⚠️ **{upload.name}** — no readable text "
+                    "was extracted. OCR may be needed."
+                )
+
+        except Exception as exc:
+            failed += 1
+            st.error(
+                f"❌ **{upload.name}** — "
+                f"{type(exc).__name__}: {exc}"
+            )
+
+        progress.progress(
+            (i + 1) / len(uploads),
+            text=f"Processed {i + 1} of {len(uploads)} files",
+        )
+
+    progress.empty()
+
+    st.success(
+        f"Finished: {added} added, {passages_total} searchable "
+        f"passages, {duplicates} duplicates, {empty} unreadable, "
+        f"{failed} failed."
+    )
+
+
+with st.expander("Index a folder on this computer"):
+    folder_path = st.text_input(
+        "Folder path",
+        placeholder=r"C:\Users\HP\Documents\Notes",
+    )
+
+    if st.button(
+        "Scan folder and index files",
+        disabled=not folder_path.strip(),
+    ):
+        folder = Path(
+            folder_path.strip().strip('"')
+        ).expanduser()
+
+        if not folder.exists() or not folder.is_dir():
+            st.error("That folder does not exist.")
+
+        else:
+            candidates = [
+                p for p in folder.rglob("*")
+                if p.is_file()
+                and p.suffix.lower() in {".pdf", ".docx", ".txt"}
+            ]
+
+            if not candidates:
+                st.warning("No supported documents were found.")
+
+            else:
+                added = duplicates = empty = failed = 0
+                bar = st.progress(0, text="Scanning folder...")
+
+                for i, path in enumerate(candidates):
+                    try:
+                        status, _, _ = add_document(
+                            path.name,
+                            path.read_bytes(),
+                            str(path.resolve()),
+                        )
+
+                        if status == "added":
+                            added += 1
+                        elif status == "duplicate":
+                            duplicates += 1
+                        else:
+                            empty += 1
+
+                    except Exception as exc:
+                        failed += 1
+                        st.warning(
+                            f"{path.name}: {type(exc).__name__}: {exc}"
+                        )
+
+                    bar.progress(
+                        (i + 1) / len(candidates),
+                        text=f"Processed {i + 1} of {len(candidates)} files",
+                    )
+
+                bar.empty()
+
+                st.success(
+                    f"Folder scan finished: {added} added, "
+                    f"{duplicates} duplicates, {empty} unreadable, "
+                    f"{failed} failed."
+                )
+
+
+st.divider()
+st.header("2. Your library")
+
+docs = get_documents()
+passage_total = sum(int(d["passage_count"]) for d in docs)
+
+c1, c2 = st.columns(2)
+c1.metric("Saved documents", len(docs))
+c2.metric("Searchable passages", passage_total)
+
+if docs:
+    with st.expander("Manage saved documents"):
+        labels = {
+            f"{d['filename']} · {d['source_path']} "
+            f"({d['passage_count']} passages)": d["id"]
+            for d in docs
+        }
+
+        selected = st.selectbox(
+            "Select a document to remove",
+            list(labels),
+        )
+
+        if st.button("Remove selected document"):
+            with get_connection() as con:
+                con.execute(
+                    "DELETE FROM documents WHERE id=?",
+                    (labels[selected],),
+                )
+
+            st.success("Document removed from the local index.")
+            st.rerun()
+
+        if st.button("Clear entire library"):
+            st.session_state["confirm_clear_library"] = True
+
+        if st.session_state.get("confirm_clear_library"):
+            st.warning(
+                "This permanently removes all indexed documents "
+                "from this app's local database."
+            )
+
+            yes, no = st.columns(2)
+
+            if yes.button("Confirm clear library", type="primary"):
+                with get_connection() as con:
+                    con.execute("DELETE FROM documents")
+
+                st.session_state["confirm_clear_library"] = False
+                st.rerun()
+
+            if no.button("Cancel"):
+                st.session_state["confirm_clear_library"] = False
+                st.rerun()
+
+    with st.expander("See indexed document details"):
+        for d in docs:
+            st.write(
+                f"**{d['filename']}** — {d['passage_count']} passages, "
+                f"{d['text_chars']:,} extracted characters"
+            )
+            st.caption(d["source_path"])
+
+else:
+    st.info(
+        "Your library is empty. Select files above and click "
+        "**Index selected files**."
+    )
+
+    if st.button("Load demo documents"):
+        for p in sorted(SAMPLE_DIR.glob("*.txt")):
+            try:
+                add_document(
+                    p.name,
+                    p.read_bytes(),
+                    f"Demo documents/{p.name}",
+                )
+            except Exception as exc:
+                st.error(f"Could not load {p.name}: {exc}")
+
+        st.rerun()
+
+
+st.divider()
+st.header("3. Search your library")
+
+if passage_total == 0:
+    st.info("Index at least one readable document before searching.")
+
+else:
+    query = st.text_input(
+        "What do you want to find?",
+        placeholder="e.g. Explain divergence of a vector field",
+    )
+
+    if passage_total <= 1:
+        top_k = 1
+        st.caption("Showing the only available passage.")
+    else:
+        top_k = st.slider(
+            "Number of results",
+            min_value=1,
+            max_value=min(10, passage_total),
+            value=min(5, passage_total),
+        )
+
+    if query.strip():
+        with st.spinner("Searching indexed passages..."):
+            try:
+                results = search_documents(query.strip(), top_k)
+            except Exception as exc:
+                results = []
+                st.error(
+                    f"Search failed: {type(exc).__name__}: {exc}"
+                )
+
+        if results:
+            for rank, item in enumerate(results, 1):
+                with st.container(border=True):
+                    left, right = st.columns([4, 1])
+
+                    with left:
+                        st.markdown(
+                            f"**{rank}. {item['filename']}**"
+                        )
+                        st.caption(item["source_path"])
+                        st.caption(
+                            f"Passage {item['chunk_number']}"
+                        )
+
+                    with right:
+                        st.metric(
+                            "Similarity",
+                            f"{item['score']:.3f}",
+                        )
+
+                    text = item["text"]
+                    st.write(
+                        text[:2000] + ("…" if len(text) > 2000 else "")
+                    )
+
+                    b1, b2, _ = st.columns([1, 1, 5])
+
+                    if b1.button(
+                        "👍 Useful",
+                        key=f"like_{item['passage_id']}",
+                    ):
+                        with get_connection() as con:
+                            con.execute(
+                                "INSERT INTO feedback "
+                                "(passage_id, useful) VALUES (?, 1)",
+                                (item["passage_id"],),
+                            )
+
+                        st.toast("Feedback saved locally.")
+
+                    if b2.button(
+                        "👎 Not useful",
+                        key=f"dislike_{item['passage_id']}",
+                    ):
+                        with get_connection() as con:
+                            con.execute(
+                                "INSERT INTO feedback "
+                                "(passage_id, useful) VALUES (?, 0)",
+                                (item["passage_id"],),
+                            )
+
+                        st.toast("Feedback saved locally.")
+
+        else:
+            st.warning(
+                "No results found, or search failed. "
+                "Check that readable documents were indexed."
+            )
+
+        st.caption(
+            "This is semantic passage search, not a generative chatbot. "
+            "Similarity scores are ranking signals, not probabilities."
+        )
+
+
+with st.expander("About this app and its limitations"):
+    st.markdown("""
+    - Supports text-based PDF, DOCX and TXT files.
+    - Stores the search index in the data folder beside this app.
+    - The first AI model download requires an internet connection.
+    - Scanned or image-only PDFs may need OCR.
+    - This prototype is designed to run locally on your computer.
+    - Do not publish private documents or expose the app online
+      without appropriate authentication and data isolation.
+    """)
