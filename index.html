@@ -1,0 +1,195 @@
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <meta name="description"
+          content="DocuFind AI helps you search and organize your personal documents.">
+
+    <title>DocuFind AI | Personal Document Search</title>
+
+    <link rel="stylesheet" href="style.css">
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.8.0/mammoth.browser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+</head>
+
+<body>
+    <header class="app-header">
+        <div class="brand">
+            <div class="brand-icon">D</div>
+            <div>
+                <h1>DocuFind AI</h1>
+                <p>AI Personal Document Search</p>
+            </div>
+        </div>
+
+        <div class="header-status">
+            <span class="status-dot"></span>
+            <span>Personal Workspace</span>
+        </div>
+    </header>
+
+    <main class="container">
+        <section class="hero">
+            <p class="eyebrow">YOUR PERSONAL DOCUMENT ASSISTANT</p>
+            <h2>Find anything in your documents.</h2>
+            <p class="hero-description">
+                Search your files, discover relevant information, and keep
+                your personal document collection organized.
+            </p>
+        </section>
+
+        <section class="search-section">
+            <form id="searchForm" class="search-form">
+                <label for="searchInput" class="visually-hidden">
+                    Search your documents
+                </label>
+
+                <input
+                    type="search"
+                    id="searchInput"
+                    placeholder="Search documents by name or content..."
+                    autocomplete="off"
+                >
+
+                <button type="submit" id="searchButton">Search</button>
+            </form>
+
+            <div class="search-options">
+                <label class="checkbox-option">
+                    <input type="checkbox" id="contentSearch" checked>
+                    Search inside document content
+                </label>
+
+                <label class="checkbox-option">
+                    <input type="checkbox" id="fuzzySearch">
+                    Allow approximate matches
+                </label>
+            </div>
+        </section>
+
+        <section class="upload-section">
+            <div class="section-heading">
+                <div>
+                    <h3>Add documents</h3>
+                    <p>Select files or choose a folder to index.</p>
+                </div>
+            </div>
+
+            <div class="upload-actions">
+                <label for="fileInput" class="button button-primary">
+                    Select Files
+                </label>
+
+                <input
+                    type="file"
+                    id="fileInput"
+                    accept=".pdf,.docx,.txt,.md,.csv,.json,.html,.htm,.log"
+                    multiple
+                    hidden
+                >
+
+                <label for="folderInput" class="button button-secondary">
+                    Select Folder
+                </label>
+
+                <input
+                    type="file"
+                    id="folderInput"
+                    webkitdirectory
+                    directory
+                    multiple
+                    hidden
+                >
+            </div>
+
+            <p class="privacy-note">
+                Documents selected here are processed by your browser.
+                They are not automatically uploaded to a server by this page.
+            </p>
+
+            <div id="uploadStatus" class="status-message" role="status"
+                 aria-live="polite">
+                No documents selected.
+            </div>
+        </section>
+
+        <section class="library-section">
+            <div class="section-heading">
+                <div>
+                    <h3>Your document library</h3>
+                    <p>Review documents indexed in this browser.</p>
+                </div>
+
+                <button type="button" id="clearLibraryButton"
+                        class="button button-danger">
+                    Clear Library
+                </button>
+            </div>
+
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <span class="stat-label">Indexed Documents</span>
+                    <strong id="documentCount">0</strong>
+                </div>
+
+                <div class="stat-card">
+                    <span class="stat-label">Search Results</span>
+                    <strong id="resultCount">0</strong>
+                </div>
+
+                <div class="stat-card">
+                    <span class="stat-label">Storage</span>
+                    <strong>Browser</strong>
+                </div>
+            </div>
+
+            <div id="libraryList" class="library-list">
+                <div class="empty-state">
+                    <h4>Your library is empty</h4>
+                    <p>Select documents above to start building your library.</p>
+                </div>
+            </div>
+        </section>
+
+        <section class="results-section">
+            <div class="section-heading">
+                <div>
+                    <h3>Search results</h3>
+                    <p>Matching documents will appear below.</p>
+                </div>
+            </div>
+
+            <div id="searchMessage" class="status-message" role="status"
+                 aria-live="polite">
+                Enter a search term to get started.
+            </div>
+
+            <div id="resultsList" class="results-list">
+                <div class="empty-state">
+                    <p>Your search results will appear here.</p>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="app-footer">
+        <p>DocuFind AI — Personal Document Search</p>
+        <p>Organize your information. Find it faster.</p>
+    </footer>
+
+    <script>
+        if (window.pdfjsLib) {
+            pdfjsLib.GlobalWorkerOptions.workerSrc =
+                "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+        }
+    </script>
+
+    <script src="app.js"></script>
+</body>
+</html>
+```
