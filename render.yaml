@@ -6,9 +6,8 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:app
 
-  - type: web
+  - type: static
     name: docufind-ai
-    runtime: static
     buildCommand: ""
     staticPublishPath: .
     routes:
