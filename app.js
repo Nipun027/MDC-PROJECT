@@ -1,7 +1,6 @@
-```javascript
 /* =====================================================
    DOCUFIND AI
-   Browser-based document indexing and search
+   Semantic document search and browser-based indexing
    ===================================================== */
 
 "use strict";
@@ -44,7 +43,7 @@ const clearLibraryButton =
     document.getElementById("clearLibraryButton");
 
 // -----------------------------------------------------
-// 3. INITIALIZE THE APPLICATION
+// 3. INITIALIZE APPLICATION
 // -----------------------------------------------------
 
 document.addEventListener("DOMContentLoaded", initializeApp);
@@ -66,22 +65,24 @@ async function initializeApp() {
         );
 
         console.log("DocuFind AI initialized successfully.");
+
     } catch (error) {
         console.error("Initialization error:", error);
 
         setStatus(
             uploadStatus,
-            "Could not initialize browser storage. Try another browser or check storage permissions."
+            "Could not initialize browser storage."
         );
     }
 }
 
 // -----------------------------------------------------
-// 4. OPEN INDEXEDDB DATABASE
+// 4. INDEXEDDB
 // -----------------------------------------------------
 
 function openDatabase() {
     return new Promise((resolve, reject) => {
+
         if (!("indexedDB" in window)) {
             reject(new Error("IndexedDB is not supported."));
             return;
@@ -90,9 +91,11 @@ function openDatabase() {
         const request = indexedDB.open(DB_NAME, DB_VERSION);
 
         request.onupgradeneeded = function (event) {
+
             const db = event.target.result;
 
             if (!db.objectStoreNames.contains(STORE_NAME)) {
+
                 const store = db.createObjectStore(STORE_NAME, {
                     keyPath: "id"
                 });
@@ -107,20 +110,12 @@ function openDatabase() {
             }
         };
 
-        request.onsuccess = function () {
-            resolve(request.result);
-        };
+        request.onsuccess = () => resolve(request.result);
 
-        request.onerror = function () {
-            reject(request.error);
-        };
+        request.onerror = () => reject(request.error);
 
-        request.onblocked = function () {
-            reject(
-                new Error(
-                    "Database upgrade blocked. Close other DocuFind AI tabs and reload."
-                )
-            );
+        request.onblocked = () => {
+            reject(new Error("Database upgrade blocked."));
         };
     });
 }
@@ -131,13 +126,15 @@ function openDatabase() {
 
 function getAllDocuments() {
     return new Promise((resolve, reject) => {
+
         const transaction = database.transaction(
             STORE_NAME,
             "readonly"
         );
 
-        const store = transaction.objectStore(STORE_NAME);
-        const request = store.getAll();
+        const request = transaction
+            .objectStore(STORE_NAME)
+            .getAll();
 
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject(request.error);
@@ -146,13 +143,15 @@ function getAllDocuments() {
 
 function saveDocument(documentData) {
     return new Promise((resolve, reject) => {
+
         const transaction = database.transaction(
             STORE_NAME,
             "readwrite"
         );
 
-        const store = transaction.objectStore(STORE_NAME);
-        const request = store.put(documentData);
+        const request = transaction
+            .objectStore(STORE_NAME)
+            .put(documentData);
 
         request.onsuccess = () => resolve();
         request.onerror = () => reject(request.error);
@@ -161,6 +160,7 @@ function saveDocument(documentData) {
 
 function deleteAllDocuments() {
     return new Promise((resolve, reject) => {
+
         const transaction = database.transaction(
             STORE_NAME,
             "readwrite"
@@ -195,25 +195,20 @@ folderInput.addEventListener("change", async function () {
 });
 
 clearLibraryButton.addEventListener("click", async function () {
+
     if (isProcessing) {
-        setStatus(
-            uploadStatus,
-            "Please wait until document processing finishes."
-        );
+        setStatus(uploadStatus, "Please wait until processing finishes.");
         return;
     }
 
     const confirmed = window.confirm(
-        "Are you sure you want to delete all indexed documents from this browser?"
+        "Are you sure you want to delete all indexed documents?"
     );
 
-    if (!confirmed) {
-        return;
-    }
+    if (!confirmed) return;
 
     try {
         await deleteAllDocuments();
-
         await refreshLibrary();
 
         resultsList.replaceChildren();
@@ -227,17 +222,12 @@ clearLibraryButton.addEventListener("click", async function () {
 
         setStatus(uploadStatus, "Your document library has been cleared.");
 
-        setStatus(
-            searchMessage,
-            "Enter a search term to get started."
-        );
+        setStatus(searchMessage, "Enter a search term to get started.");
+
     } catch (error) {
         console.error(error);
 
-        setStatus(
-            uploadStatus,
-            "Could not clear the library."
-        );
+        setStatus(uploadStatus, "Could not clear the library.");
     }
 });
 
@@ -250,6 +240,7 @@ function setStatus(element, message) {
 }
 
 function showEmptyState(container, message) {
+
     const wrapper = document.createElement("div");
     wrapper.className = "empty-state";
 
@@ -262,23 +253,19 @@ function showEmptyState(container, message) {
 }
 
 // -----------------------------------------------------
-// 8. PROCESS SELECTED FILES
+// 8. PROCESS FILES
 // -----------------------------------------------------
 
 async function handleFiles(fileCollection) {
+
     if (isProcessing) {
-        setStatus(
-            uploadStatus,
-            "Please wait for the current indexing task to finish."
-        );
+        setStatus(uploadStatus, "Please wait for current indexing to finish.");
         return;
     }
 
     const files = Array.from(fileCollection || []);
 
-    if (files.length === 0) {
-        return;
-    }
+    if (files.length === 0) return;
 
     isProcessing = true;
 
@@ -290,7 +277,9 @@ async function handleFiles(fileCollection) {
     let failed = 0;
 
     try {
+
         for (let i = 0; i < files.length; i++) {
+
             const file = files[i];
 
             setStatus(
@@ -299,18 +288,18 @@ async function handleFiles(fileCollection) {
             );
 
             try {
+
                 const outcome = await processFile(file);
 
-                if (outcome === "saved") {
-                    processed++;
-                } else if (outcome === "skipped") {
-                    skipped++;
-                }
+                if (outcome === "saved") processed++;
+                else if (outcome === "skipped") skipped++;
+
             } catch (error) {
+
                 failed++;
 
                 console.error(
-                    "Could not process file:",
+                    "Could not process:",
                     file.name,
                     error
                 );
@@ -321,9 +310,11 @@ async function handleFiles(fileCollection) {
 
         setStatus(
             uploadStatus,
-            `Indexing complete. Added: ${processed}. Duplicates or unsupported files: ${skipped}. Failed: ${failed}.`
+            `Indexing complete. Added: ${processed}. Skipped: ${skipped}. Failed: ${failed}.`
         );
+
     } finally {
+
         isProcessing = false;
 
         fileInput.disabled = false;
@@ -332,20 +323,20 @@ async function handleFiles(fileCollection) {
 }
 
 // -----------------------------------------------------
-// 9. CHECK SUPPORTED FILE TYPES
+// 9. FILE TYPES
 // -----------------------------------------------------
 
 function getExtension(filename) {
+
     const index = filename.lastIndexOf(".");
 
-    if (index === -1) {
-        return "";
-    }
+    if (index === -1) return "";
 
     return filename.slice(index + 1).toLowerCase();
 }
 
 function isSupportedFile(filename) {
+
     const supported = [
         "pdf",
         "docx",
@@ -362,14 +353,13 @@ function isSupportedFile(filename) {
 }
 
 // -----------------------------------------------------
-// 10. CREATE A SHA-256 FILE HASH
+// 10. SHA-256 DUPLICATE DETECTION
 // -----------------------------------------------------
 
 async function calculateFileHash(file) {
+
     if (!window.crypto || !window.crypto.subtle) {
-        throw new Error(
-            "Secure hashing is unavailable. Use HTTPS or localhost."
-        );
+        throw new Error("Secure hashing is unavailable.");
     }
 
     const buffer = await file.arrayBuffer();
@@ -385,13 +375,15 @@ async function calculateFileHash(file) {
 }
 
 // -----------------------------------------------------
-// 11. EXTRACT TEXT FROM A FILE
+// 11. TEXT EXTRACTION
 // -----------------------------------------------------
 
 async function extractText(file) {
+
     const extension = getExtension(file.name);
 
     switch (extension) {
+
         case "pdf":
             return await extractPDFText(file);
 
@@ -413,10 +405,11 @@ async function extractText(file) {
 }
 
 // -----------------------------------------------------
-// 12. EXTRACT TEXT FROM PDF
+// 12. PDF EXTRACTION
 // -----------------------------------------------------
 
 async function extractPDFText(file) {
+
     if (!window.pdfjsLib) {
         throw new Error("PDF.js could not be loaded.");
     }
@@ -429,7 +422,12 @@ async function extractPDFText(file) {
 
     const pageTexts = [];
 
-    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
+    for (
+        let pageNumber = 1;
+        pageNumber <= pdf.numPages;
+        pageNumber++
+    ) {
+
         const page = await pdf.getPage(pageNumber);
 
         const textContent = await page.getTextContent();
@@ -446,12 +444,13 @@ async function extractPDFText(file) {
 }
 
 // -----------------------------------------------------
-// 13. EXTRACT TEXT FROM DOCX
+// 13. DOCX EXTRACTION
 // -----------------------------------------------------
 
 async function extractDOCXText(file) {
+
     if (!window.mammoth) {
-        throw new Error("The DOCX extraction library is unavailable.");
+        throw new Error("DOCX extraction library unavailable.");
     }
 
     const buffer = await file.arrayBuffer();
@@ -464,10 +463,11 @@ async function extractDOCXText(file) {
 }
 
 // -----------------------------------------------------
-// 14. INDEX AND SAVE A DOCUMENT
+// 14. INDEX DOCUMENT
 // -----------------------------------------------------
 
 async function processFile(file) {
+
     if (!isSupportedFile(file.name)) {
         return "skipped";
     }
@@ -484,23 +484,25 @@ async function processFile(file) {
         document => document.hash === hash
     );
 
-    if (duplicate) {
-        return "skipped";
-    }
+    if (duplicate) return "skipped";
 
     const text = await extractText(file);
 
-    const relativePath =
-        file.webkitRelativePath || file.name;
-
     const documentData = {
+
         id: hash,
         hash: hash,
+
         name: file.name,
-        path: relativePath,
+
+        path: file.webkitRelativePath || file.name,
+
         extension: getExtension(file.name),
+
         size: file.size,
+
         text: text,
+
         indexedAt: new Date().toISOString()
     };
 
@@ -514,9 +516,8 @@ async function processFile(file) {
 // -----------------------------------------------------
 
 async function refreshLibrary() {
-    if (!database) {
-        return;
-    }
+
+    if (!database) return;
 
     const documents = await getAllDocuments();
 
@@ -529,6 +530,7 @@ async function refreshLibrary() {
     libraryList.replaceChildren();
 
     if (documents.length === 0) {
+
         showEmptyState(
             libraryList,
             "Your library is empty. Select documents above to get started."
@@ -538,6 +540,7 @@ async function refreshLibrary() {
     }
 
     for (const documentData of documents) {
+
         const card = document.createElement("article");
         card.className = "document-card";
 
@@ -549,6 +552,7 @@ async function refreshLibrary() {
         path.textContent = "Path: " + documentData.path;
 
         const details = document.createElement("p");
+
         details.textContent =
             `${formatFileSize(documentData.size)} · ` +
             `${documentData.extension.toUpperCase()}`;
@@ -564,13 +568,12 @@ async function refreshLibrary() {
 // -----------------------------------------------------
 
 async function performSearch() {
+
     const query = searchInput.value.trim();
 
     if (!query) {
-        setStatus(
-            searchMessage,
-            "Please enter a search term."
-        );
+
+        setStatus(searchMessage, "Please enter a search query.");
 
         resultsList.replaceChildren();
 
@@ -584,71 +587,89 @@ async function performSearch() {
         return;
     }
 
+    searchButton.disabled = true;
+
     try {
+
         const documents = await getAllDocuments();
 
-        const terms = query
-            .toLowerCase()
-            .split(/\s+/)
-            .filter(Boolean);
+        if (documents.length === 0) {
 
-        const searchInsideContent = contentSearch.checked;
-        const allowApproximate = fuzzySearch.checked;
+            showEmptyState(
+                resultsList,
+                "Upload documents before searching."
+            );
 
-        const matches = [];
+            resultCount.textContent = "0";
 
-        for (const documentData of documents) {
-            const filename = documentData.name.toLowerCase();
-            const content = (documentData.text || "").toLowerCase();
+            setStatus(searchMessage, "Your document library is empty.");
 
-            let score = 0;
-
-            for (const term of terms) {
-                if (filename.includes(term)) {
-                    score += 10;
-                }
-
-                if (
-                    searchInsideContent &&
-                    content.includes(term)
-                ) {
-                    score += 3;
-                }
-
-                if (
-                    allowApproximate &&
-                    term.length >= 4 &&
-                    (
-                        filename.includes(term.slice(0, -1)) ||
-                        (
-                            searchInsideContent &&
-                            content.includes(term.slice(0, -1))
-                        )
-                    )
-                ) {
-                    score += 1;
-                }
-            }
-
-            if (score > 0) {
-                matches.push({
-                    document: documentData,
-                    score: score
-                });
-            }
+            return;
         }
 
-        matches.sort((a, b) => b.score - a.score);
+        let matches = [];
+
+        if (contentSearch.checked) {
+
+            // SEMANTIC SEARCH USING SENTENCE TRANSFORMERS
+
+            if (typeof window.semanticSearchDocuments === "function") {
+
+                setStatus(
+                    searchMessage,
+                    "Loading AI model and searching by meaning. First search may take longer..."
+                );
+
+                const semanticResults =
+                    await window.semanticSearchDocuments(
+                        query,
+                        documents
+                    );
+
+                matches = semanticResults.map(item => ({
+                    document: item.document,
+                    score: item.score,
+                    semantic: true
+                }));
+
+            } else {
+
+                throw new Error(
+                    "Semantic search module is not loaded."
+                );
+            }
+
+        } else {
+
+            // FILENAME SEARCH
+
+            const lowerQuery = query.toLowerCase();
+
+            matches = documents
+                .filter(doc =>
+                    doc.name.toLowerCase().includes(lowerQuery)
+                )
+                .map(doc => ({
+                    document: doc,
+                    score: 100,
+                    semantic: false
+                }));
+        }
 
         displaySearchResults(matches, query);
 
     } catch (error) {
+
         console.error("Search failed:", error);
 
         setStatus(
             searchMessage,
-            "Search failed. Please reload the page and try again."
+            "AI search failed. Check your internet connection and reload the page."
         );
+
+    } finally {
+
+        searchButton.disabled = false;
     }
 }
 
@@ -657,19 +678,21 @@ async function performSearch() {
 // -----------------------------------------------------
 
 function displaySearchResults(matches, query) {
+
     resultsList.replaceChildren();
 
     resultCount.textContent = String(matches.length);
 
     if (matches.length === 0) {
+
         setStatus(
             searchMessage,
-            `No documents matched "${query}".`
+            "No matching documents found."
         );
 
         showEmptyState(
             resultsList,
-            "No matching documents found. Try another search term."
+            "Try another search query."
         );
 
         return;
@@ -677,10 +700,11 @@ function displaySearchResults(matches, query) {
 
     setStatus(
         searchMessage,
-        `Found ${matches.length} matching document(s).`
+        `Found ${matches.length} document(s), ranked by semantic similarity.`
     );
 
     for (const match of matches) {
+
         const documentData = match.document;
 
         const card = document.createElement("article");
@@ -695,32 +719,46 @@ function displaySearchResults(matches, query) {
 
         const snippet = document.createElement("p");
 
-        if (contentSearch.checked && documentData.text) {
-            snippet.textContent = createSnippet(
-                documentData.text,
-                query
-            );
+        snippet.textContent = createSnippet(
+            documentData.text || "",
+            query
+        );
+
+        const similarity = document.createElement("p");
+
+        similarity.className = "similarity-score";
+
+        if (match.semantic) {
+
+            similarity.textContent =
+                `Semantic Similarity: ${match.score}%`;
+
         } else {
-            snippet.textContent =
-                "Matched document filename.";
+
+            similarity.textContent =
+                "Filename Match";
         }
 
-        const details = document.createElement("p");
-        details.textContent =
-            `Relevance score: ${match.score}`;
-
-        card.append(heading, path, snippet, details);
+        card.append(
+            heading,
+            path,
+            snippet,
+            similarity
+        );
 
         resultsList.appendChild(card);
     }
 }
 
 // -----------------------------------------------------
-// 18. CREATE A RELEVANT TEXT SNIPPET
+// 18. CREATE TEXT SNIPPET
 // -----------------------------------------------------
 
 function createSnippet(text, query) {
-    const normalizedText = text.replace(/\s+/g, " ").trim();
+
+    const normalizedText = text
+        .replace(/\s+/g, " ")
+        .trim();
 
     if (!normalizedText) {
         return "No readable text was extracted from this document.";
@@ -736,6 +774,7 @@ function createSnippet(text, query) {
     let firstPosition = -1;
 
     for (const term of terms) {
+
         const position = lowerText.indexOf(term);
 
         if (
@@ -750,14 +789,47 @@ function createSnippet(text, query) {
     }
 
     if (firstPosition === -1) {
+
         return normalizedText.slice(0, 250) +
             (normalizedText.length > 250 ? "..." : "");
     }
 
     const start = Math.max(0, firstPosition - 90);
+
     const end = Math.min(
         normalizedText.length,
         firstPosition + 180
     );
 
-   
+    return (
+        (start > 0 ? "..." : "") +
+        normalizedText.slice(start, end) +
+        (end < normalizedText.length ? "..." : "")
+    );
+}
+
+// -----------------------------------------------------
+// 19. FORMAT FILE SIZE
+// -----------------------------------------------------
+
+function formatFileSize(bytes) {
+
+    if (!bytes) return "0 Bytes";
+
+    const units = [
+        "Bytes",
+        "KB",
+        "MB",
+        "GB"
+    ];
+
+    const index = Math.floor(
+        Math.log(bytes) / Math.log(1024)
+    );
+
+    return (
+        (bytes / Math.pow(1024, index)).toFixed(2) +
+        " " +
+        units[index]
+    );
+}
